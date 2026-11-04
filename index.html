@@ -1,0 +1,535 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Cyberpunk Neon City Arcade Game</title>
+    <style>
+        body {
+            margin: 0;
+            overflow: hidden;
+            background-color: #000;
+            font-family: 'Arial', sans-serif;
+            user-select: none;
+        }
+        #ui {
+            position: absolute;
+            top: 20px;
+            left: 50%;
+            transform: translateX(-50%);
+            color: #00ffcc;
+            text-align: center;
+            pointer-events: none;
+            text-shadow: 0 0 10px #00ffcc;
+        }
+        h1 { margin: 0 0 5px 0; font-size: 24px; letter-spacing: 2px; }
+        #score { font-size: 26px; font-weight: bold; color: #ff007f; text-shadow: 0 0 10px #ff007f; }
+        #status { font-size: 15px; color: #ffd700; margin-top: 5px; text-shadow: 0 0 8px #ffd700; }
+        #guide { font-size: 12px; color: #888; margin-top: 3px; }
+        
+        .popup {
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            color: white;
+            text-align: center;
+            display: none;
+            background: rgba(0, 0, 0, 0.9);
+            padding: 30px;
+            border-radius: 10px;
+        }
+        #gameover {
+            border: 2px solid #ff007f;
+            box-shadow: 0 0 30px rgba(255, 0, 127, 0.6);
+        }
+        #gameover h2 { color: #ff007f; margin-top: 0; text-shadow: 0 0 10px #ff007f; }
+        
+        #gameclear {
+            border: 2px solid #00ffcc;
+            box-shadow: 0 0 30px rgba(0, 255, 204, 0.6);
+        }
+        #gameclear h2 { color: #00ffcc; margin-top: 0; text-shadow: 0 0 10px #00ffcc; }
+
+        button {
+            background: #ff007f;
+            border: none;
+            color: white;
+            padding: 12px 24px;
+            font-size: 16px;
+            font-weight: bold;
+            border-radius: 5px;
+            cursor: pointer;
+            margin-top: 15px;
+            box-shadow: 0 0 10px #ff007f;
+            transition: 0.2s;
+        }
+        button:hover { background: #00ffcc; color: black; box-shadow: 0 0 15px #00ffcc; }
+    </style>
+</head>
+<body>
+    <div id="ui">
+        <h1>CYBERPUNK CITY DODGE</h1>
+        <div id="score">생존 시간: 0.0s / 120.0s</div>
+        <div id="status">무적 상태: OFF 🛡️</div>
+        <div id="guide">조작: W, A, S, D | 벽에 닿으면 한 블록 튕겨나갑니다!</div>
+    </div>
+
+    <div id="gameover" class="popup">
+        <h2>GAME OVER</h2>
+        <p>기록: <span id="final-score">0.0</span>초</p>
+        <button onclick="restartGame()">다시 도전</button>
+    </div>
+
+    <div id="gameclear" class="popup">
+        <h2>VICTORY! 🎉</h2>
+        <p>2분 생존 클리어 성공!</p>
+        <button onclick="restartGame()">다시 하기</button>
+    </div>
+
+    <!-- Three.js 라이브러리 로드 -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+    
+    <script>
+        let scene, camera, renderer;
+        let player;
+        let balls = [], coins = [], cityBuildings = [];
+        let score = 0, isGameOver = false, isGameCleared = false;
+        let keys = { w: false, a: false, s: false, d: false };
+        let audioCtx, musicInterval;
+        let gameStartTime = 0;
+        let isInvincible = false;
+        let startInvincible = true;
+        let shieldBreakInvincibleTime = 0; // 보호막 깨진 후 1초 무적 타이머용
+
+        const playerSpeed = 0.24;
+        const arenaSize = 8;
+        const ballSpeed = 0.15;
+
+        let addedAt60 = false;
+        let addedAt90 = false;
+        let coinSpawnedAt60 = false;
+
+        let ballGeo, ballMat, coinGeo, coinMat;
+        let neonLight1;
+        let clock = new THREE.Clock();
+
+        let ledTiles = [];
+        const gridSize = 16;
+        const tileSize = (arenaSize * 2) / gridSize; // 한 블록(타일) 크기 계산용
+
+        function init() {
+            scene = new THREE.Scene();
+            scene.background = new THREE.Color(0x010108);
+
+            camera = new THREE.PerspectiveCamera(60, window.innerWidth / window.innerHeight, 0.1, 1000);
+            camera.position.set(0, 14, 12);
+            camera.lookAt(0, 0, 0);
+
+            renderer = new THREE.WebGLRenderer({ antialias: true });
+            renderer.setSize(window.innerWidth, window.innerHeight);
+            document.body.appendChild(renderer.domElement);
+
+            const ambientLight = new THREE.AmbientLight(0xffffff, 0.3);
+            scene.add(ambientLight);
+
+            neonLight1 = new THREE.PointLight(0xff00ff, 2.5, 30);
+            neonLight1.position.set(0, 5, 0);
+            scene.add(neonLight1);
+
+            createCyberCity();
+
+            for (let x = 0; x < gridSize; x++) {
+                for (let z = 0; z < gridSize; z++) {
+                    const tileGeo = new THREE.PlaneGeometry(tileSize * 0.95, tileSize * 0.95);
+                    const tileMat = new THREE.MeshBasicMaterial({ 
+                        color: 0x0a0a0a, 
+                        transparent: true, 
+                        opacity: 0.8 
+                    });
+                    const tile = new THREE.Mesh(tileGeo, tileMat);
+                    tile.rotation.x = -Math.PI / 2;
+                    
+                    const posX = (x - gridSize / 2 + 0.5) * tileSize;
+                    const posZ = (z - gridSize / 2 + 0.5) * tileSize;
+                    tile.position.set(posX, 0.01, posZ);
+
+                    tile.userData = { 
+                        baseColor: 0x0a0a0a, 
+                        glowIntensity: 0,
+                        gridX: x,
+                        gridZ: z
+                    };
+
+                    scene.add(tile);
+                    ledTiles.push(tile);
+                }
+            }
+
+            const borderGeo = new THREE.EdgesGeometry(new THREE.BoxGeometry(arenaSize * 2, 0.1, arenaSize * 2));
+            const borderMat = new THREE.LineBasicMaterial({ color: 0x00ffcc, linewidth: 3 });
+            const borderBox = new THREE.LineSegments(borderGeo, borderMat);
+            borderBox.position.y = 0.05;
+            scene.add(borderBox);
+
+            const playerGeo = new THREE.BoxGeometry(0.8, 0.8, 0.8);
+            const playerMat = new THREE.MeshStandardMaterial({ 
+                color: 0xffd700, 
+                emissive: 0xffd700, 
+                emissiveIntensity: 1.0,
+                roughness: 0.2 
+            });
+            player = new THREE.Mesh(playerGeo, playerMat);
+            player.position.set(0, 0.4, 0);
+            scene.add(player);
+
+            ballGeo = new THREE.SphereGeometry(0.5, 16, 16);
+            ballMat = new THREE.MeshStandardMaterial({ 
+                color: 0xff007f, 
+                emissive: 0xff007f, 
+                emissiveIntensity: 0.9,
+                roughness: 0.1 
+            });
+
+            coinGeo = new THREE.CylinderGeometry(0.4, 0.4, 0.1, 16);
+            coinMat = new THREE.MeshStandardMaterial({
+                color: 0xffd700,
+                emissive: 0xffd700,
+                emissiveIntensity: 1.0,
+                metalness: 0.8,
+                roughness: 0.1
+            });
+
+            spawnBalls(10);
+            spawnCoins(2);
+
+            window.addEventListener('keydown', (e) => {
+                initAudio();
+                const key = e.key.toLowerCase();
+                if (key === 'w') keys.w = true;
+                if (key === 'a') keys.a = true;
+                if (key === 's') keys.s = true;
+                if (key === 'd') keys.d = true;
+            });
+
+            window.addEventListener('keyup', (e) => {
+                const key = e.key.toLowerCase();
+                if (key === 'w') keys.w = false;
+                if (key === 'a') keys.a = false;
+                if (key === 's') keys.s = false;
+                if (key === 'd') keys.d = false;
+            });
+
+            window.addEventListener('resize', () => {
+                camera.aspect = window.innerWidth / window.innerHeight;
+                camera.updateProjectionMatrix();
+                renderer.setSize(window.innerWidth, window.innerHeight);
+            });
+
+            gameStartTime = performance.now();
+            animate();
+        }
+
+        function createCyberCity() {
+            const buildingMat = new THREE.MeshStandardMaterial({
+                color: 0x080812,
+                roughness: 0.2,
+                metalness: 0.8
+            });
+
+            for (let i = 0; i < 40; i++) {
+                const width = Math.random() * 2 + 1.5;
+                const height = Math.random() * 15 + 5;
+                const depth = Math.random() * 2 + 1.5;
+
+                const geo = new THREE.BoxGeometry(width, height, depth);
+                const building = new THREE.Mesh(geo, buildingMat);
+
+                const angle = Math.random() * Math.PI * 2;
+                const distance = Math.random() * 15 + 12;
+                const x = Math.cos(angle) * distance;
+                const z = Math.sin(angle) * distance;
+
+                building.position.set(x, height / 2 - 2, z);
+                scene.add(building);
+                cityBuildings.push(building);
+
+                const wireGeo = new THREE.EdgesGeometry(geo);
+                const neonColor = Math.random() > 0.5 ? 0x00ffcc : 0xff007f;
+                const wireMat = new THREE.LineBasicMaterial({ color: neonColor, linewidth: 2 });
+                const neonEdge = new THREE.LineSegments(wireGeo, wireMat);
+                building.add(neonEdge);
+            }
+        }
+
+        function spawnBalls(count) {
+            for (let i = 0; i < count; i++) {
+                const ball = new THREE.Mesh(ballGeo, ballMat);
+                resetPosition(ball);
+
+                const angle = Math.random() * Math.PI * 2;
+                ball.userData = {
+                    vx: Math.cos(angle) * ballSpeed,
+                    vz: Math.sin(angle) * ballSpeed
+                };
+                scene.add(ball);
+                balls.push(ball);
+            }
+        }
+
+        function spawnCoins(count) {
+            for (let i = 0; i < count; i++) {
+                const coin = new THREE.Mesh(coinGeo, coinMat);
+                coin.rotation.x = Math.PI / 2;
+                resetPosition(coin);
+                scene.add(coin);
+                coins.push(coin);
+            }
+        }
+
+        function resetPosition(obj) {
+            obj.position.set(
+                (Math.random() - 0.5) * (arenaSize * 1.5),
+                0.3,
+                (Math.random() - 0.5) * (arenaSize * 1.5)
+            );
+        }
+
+        function initAudio() {
+            if (audioCtx) return;
+            audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+
+            const notes = [110, 110, 164.81, 110, 130.81, 110, 196.00, 164.81]; 
+            let step = 0;
+
+            musicInterval = setInterval(() => {
+                if (isGameOver || isGameCleared) return;
+                try {
+                    let osc = audioCtx.createOscillator();
+                    let gain = audioCtx.createGain();
+
+                    osc.type = 'sawtooth';
+                    osc.frequency.setValueAtTime(notes[step], audioCtx.currentTime);
+
+                    let filter = audioCtx.createBiquadFilter();
+                    filter.type = 'lowpass';
+                    filter.frequency.setValueAtTime(600, audioCtx.currentTime);
+
+                    gain.gain.setValueAtTime(0.15, audioCtx.currentTime);
+                    gain.gain.exponentialRampToValueAtTime(0.001, audioCtx.currentTime + 0.2);
+
+                    osc.connect(filter);
+                    filter.connect(gain);
+                    gain.connect(audioCtx.destination);
+
+                    osc.start();
+                    osc.stop(audioCtx.currentTime + 0.25);
+
+                    step = (step + 1) % notes.length;
+                } catch (e) {}
+            }, 125);
+        }
+
+        function animate() {
+            if (!isGameOver && !isGameCleared) {
+                requestAnimationFrame(animate);
+
+                let time = clock.getElapsedTime();
+                let elapsed = (performance.now() - gameStartTime) / 1000;
+                score = elapsed.toFixed(1);
+
+                // 시작 무적 체크 (2초)
+                if (startInvincible) {
+                    if (elapsed >= 2.0) {
+                        startInvincible = false;
+                        if (!isInvincible && shieldBreakInvincibleTime <= 0) {
+                            player.material.color.setHex(0x00ffcc);
+                            player.material.emissive.setHex(0x00ffcc);
+                            document.getElementById('status').innerText = '무적 상태: OFF 🛡️';
+                        }
+                    } else {
+                        document.getElementById('status').innerText = `시작 무적 중! (${(2.0 - elapsed).toFixed(1)}s)`;
+                    }
+                }
+
+                // 보호막 깨진 후 1초 무적 타이머 체크
+                if (shieldBreakInvincibleTime > 0) {
+                    shieldBreakInvincibleTime -= 0.016; // 대략 1프레임 시간 감소
+                    if (shieldBreakInvincibleTime <= 0) {
+                        if (!isInvincible && !startInvincible) {
+                            player.material.color.setHex(0x00ffcc);
+                            player.material.emissive.setHex(0x00ffcc);
+                            document.getElementById('status').innerText = '무적 상태: OFF 🛡️';
+                        }
+                    } else {
+                        document.getElementById('status').innerText = `보호막 파괴! 무적 중 (${shieldBreakInvincibleTime.toFixed(1)}s)`;
+                    }
+                }
+
+                const hue = (time * 0.05) % 1;
+                const rainbowColor = new THREE.Color().setHSL(hue, 1.0, 0.5);
+                scene.background.setHSL(hue, 0.4, 0.03);
+                neonLight1.color = rainbowColor;
+
+                if (keys.w) player.position.z -= playerSpeed;
+                if (keys.s) player.position.z += playerSpeed;
+                if (keys.a) player.position.x -= playerSpeed;
+                if (keys.d) player.position.x += playerSpeed;
+
+                // 🌟 벽(테두리)에 닿거나 나가면 한 블록(타일 크기)만큼 안쪽으로 튕겨나가기
+                const limit = arenaSize - 0.4;
+                if (player.position.x > limit) {
+                    player.position.x = limit - tileSize;
+                } else if (player.position.x < -limit) {
+                    player.position.x = -limit + tileSize;
+                }
+                if (player.position.z > limit) {
+                    player.position.z = limit - tileSize;
+                } else if (player.position.z < -limit) {
+                    player.position.z = -limit + tileSize;
+                }
+
+                ledTiles.forEach(tile => {
+                    const dx = player.position.x - tile.position.x;
+                    const dz = player.position.z - tile.position.z;
+                    const dist = Math.sqrt(dx * dx + dz * dz);
+
+                    if (dist < 0.8) {
+                        tile.userData.glowIntensity = 1.0;
+                    }
+
+                    if (tile.userData.glowIntensity > 0) {
+                        tile.userData.glowIntensity -= 0.03;
+                        const tileHue = (time * 0.2 + tile.position.x * 0.1) % 1;
+                        tile.material.color.setHSL(tileHue, 1.0, tile.userData.glowIntensity * 0.7);
+                    } else {
+                        tile.material.color.setHex(0x0a0a0a);
+                    }
+                });
+
+                if (elapsed >= 120) {
+                    gameClear();
+                    return;
+                }
+
+                if (elapsed >= 60 && !addedAt60) {
+                    addedAt60 = true;
+                    spawnBalls(5);
+                }
+
+                if (elapsed >= 90 && !addedAt90) {
+                    addedAt90 = true;
+                    spawnBalls(5);
+                }
+
+                if (elapsed >= 60 && !coinSpawnedAt60) {
+                    coinSpawnedAt60 = true;
+                    spawnCoins(2);
+                }
+
+                for (let i = coins.length - 1; i >= 0; i--) {
+                    let coin = coins[i];
+                    coin.rotation.z += 0.05;
+
+                    const dx = player.position.x - coin.position.x;
+                    const dz = player.position.z - coin.position.z;
+                    const dist = Math.sqrt(dx * dx + dz * dz);
+
+                    if (dist < 0.9) {
+                        scene.remove(coin);
+                        coins.splice(i, 1);
+                        activateShield();
+                    }
+                }
+
+                for (let i = 0; i < balls.length; i++) {
+                    let ball = balls[i];
+                    ball.position.x += ball.userData.vx;
+                    ball.position.z += ball.userData.vz;
+
+                    if (Math.abs(ball.position.x) > limit) ball.userData.vx *= -1;
+                    if (Math.abs(ball.position.z) > limit) ball.userData.vz *= -1;
+
+                    const dx = player.position.x - ball.position.x;
+                    const dz = player.position.z - ball.position.z;
+                    const dist = Math.sqrt(dx * dx + dz * dz);
+
+                    if (dist < 0.9) {
+                        if (startInvincible || shieldBreakInvincibleTime > 0) {
+                            ball.userData.vx *= -1;
+                            ball.userData.vz *= -1;
+                        } else if (isInvincible) {
+                            // 🌟 보호막이 깨질 때: 1초 무적 발동 및 보호막 해제
+                            isInvincible = false;
+                            shieldBreakInvincibleTime = 1.0; // 1초 무적 부여
+                            player.material.color.setHex(0x00ffff); // 깨진 직후 하늘색으로 표시
+                            player.material.emissive.setHex(0x00ffff);
+                            ball.userData.vx *= -1;
+                            ball.userData.vz *= -1;
+                        } else {
+                            gameOver();
+                            return;
+                        }
+                    }
+                }
+
+                renderer.render(scene, camera);
+            }
+        }
+
+        function activateShield() {
+            isInvincible = true;
+            player.material.color.setHex(0xffd700);
+            player.material.emissive.setHex(0xffd700);
+            document.getElementById('status').innerText = '무적 상태: ON ✨ (1회 방어)';
+        }
+
+        function gameOver() {
+            isGameOver = true;
+            if (musicInterval) clearInterval(musicInterval);
+            document.getElementById('final-score').innerText = score;
+            document.getElementById('gameover').style.display = 'block';
+        }
+
+        function gameClear() {
+            isGameCleared = true;
+            if (musicInterval) clearInterval(musicInterval);
+            document.getElementById('gameclear').style.display = 'block';
+        }
+
+        function restartGame() {
+            balls.forEach(ball => scene.remove(ball));
+            coins.forEach(coin => scene.remove(coin));
+            balls = [];
+            coins = [];
+
+            isGameOver = false;
+            isGameCleared = false;
+            addedAt60 = false;
+            addedAt90 = false;
+            coinSpawnedAt60 = false;
+            isInvincible = false;
+            startInvincible = true;
+            shieldBreakInvincibleTime = 0;
+            
+            player.position.set(0, 0.4, 0);
+            player.material.color.setHex(0xffd700);
+            player.material.emissive.setHex(0xffd700);
+            document.getElementById('status').innerText = '시작 무적 중!';
+            score = 0;
+
+            document.getElementById('gameover').style.display = 'none';
+            document.getElementById('gameclear').style.display = 'none';
+
+            spawnBalls(10);
+            spawnCoins(2);
+
+            gameStartTime = performance.now();
+            initAudio();
+            animate();
+        }
+
+        window.onload = init;
+    </script>
+</body>
+</html>
